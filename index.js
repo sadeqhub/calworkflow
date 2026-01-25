@@ -64,14 +64,34 @@ async function sendWhatsApp(phone, name, date, time) {
 }
 
 function extractPhone(booking) {
+  // Try multiple possible locations for phone number
   const phone =
+    booking.responses?.phone?.value ||
+    booking.responses?.phoneNumber?.value ||
+    booking.responses?.phone?.label ||
+    booking.responses?.phoneNumber?.label ||
     booking.bookingFieldsResponses?.phone ||
     booking.bookingFieldsResponses?.phoneNumber ||
-    booking.metadata?.phone;
+    booking.metadata?.phone ||
+    booking.attendees?.[0]?.phone ||
+    booking.attendees?.[0]?.phoneNumber;
 
-  if (!phone) return null;
+  if (!phone) {
+    // Debug: log booking structure to understand the data format
+    console.log(`📋 Booking ${booking.id} structure:`, JSON.stringify({
+      hasResponses: !!booking.responses,
+      hasBookingFieldsResponses: !!booking.bookingFieldsResponses,
+      hasMetadata: !!booking.metadata,
+      hasAttendees: !!booking.attendees,
+      responsesKeys: booking.responses ? Object.keys(booking.responses) : [],
+      bookingFieldsResponsesKeys: booking.bookingFieldsResponses ? Object.keys(booking.bookingFieldsResponses) : []
+    }, null, 2));
+    return null;
+  }
 
-  return phone.startsWith("+") ? phone : `+${phone}`;
+  // Clean and format phone number
+  const cleaned = String(phone).trim().replace(/\s+/g, "");
+  return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
 }
 
 async function processBooking(booking) {
