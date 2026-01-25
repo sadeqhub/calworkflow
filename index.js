@@ -13,6 +13,7 @@ const FIVE_MIN = 5 * 60 * 1000;
 // Helper: send WhatsApp message via OTPIQ
 async function sendWhatsApp(phoneNumber, templateName, templateParams = {}) {
   try {
+    console.log(`[INFO] Sending WhatsApp to ${phoneNumber} using template ${templateName}`);
     const res = await axios.post('https://api.otpiq.com/api/sms', {
       phoneNumber,
       smsType: 'whatsapp-template',
@@ -27,21 +28,23 @@ async function sendWhatsApp(phoneNumber, templateName, templateParams = {}) {
         'Content-Type': 'application/json'
       }
     });
-    console.log(`WhatsApp sent to ${phoneNumber}:`, res.data);
+    console.log(`[SUCCESS] WhatsApp sent to ${phoneNumber}:`, res.data);
   } catch (err) {
-    console.error('WhatsApp error:', err.response?.data || err.message);
+    console.error(`[ERROR] WhatsApp send failed for ${phoneNumber}:`, err.response?.data || err.message);
   }
 }
 
 // Helper: fetch upcoming bookings from Cal
 async function fetchBookings() {
   try {
+    console.log('[INFO] Fetching upcoming bookings from Cal...');
     const res = await axios.get(`https://api.cal.com/v2/organizations/${CAL_ORG_ID}/bookings?status=upcoming&take=100`, {
       headers: { Authorization: `Bearer ${CAL_API_KEY}` }
     });
+    console.log(`[INFO] Fetched ${res.data?.bookings?.length || 0} bookings`);
     return res.data?.bookings || [];
   } catch (err) {
-    console.error('Error in checkBookings:', err.response?.data || err.message);
+    console.error('[ERROR] Failed to fetch bookings:', err.response?.data || err.message);
     return [];
   }
 }
@@ -49,28 +52,43 @@ async function fetchBookings() {
 // Main cron function
 async function checkBookingsAndSendMessages() {
   const now = new Date();
+  console.log(`[INFO] Checking bookings at ${now.toISOString()}`);
+
   const bookings = await fetchBookings();
+  if (!bookings.length) {
+    console.log('[INFO] No upcoming bookings found.');
+    return;
+  }
 
   for (const booking of bookings) {
     const startTime = new Date(booking.startTime);
     const phone = booking.attendees?.[0]?.phoneNumber;
-    if (!phone) continue;
+    const attendeeName = booking.attendees?.[0]?.name || 'Guest';
+
+    if (!phone) {
+      console.warn(`[WARN] Booking ${booking.id} has no phone number. Skipping.`);
+      continue;
+    }
 
     const diff = startTime - now;
 
+    console.log(`[INFO] Booking ${booking.id} for ${attendeeName} at ${startTime.toISOString()} (diff: ${diff}ms)`);
+
     if (diff <= 0 && diff > -60 * 1000) {
-      // Booking created now (within 1 min)
-      await sendWhatsApp(phone, 'democall_booking_ar', { name: booking.attendees[0].name });
+      console.log('[INFO] Booking created now. Sending booking template...');
+      await sendWhatsApp(phone, 'democall_booking_ar', { name: attendeeName });
     } else if (Math.abs(diff - ONE_HOUR) < 60 * 1000) {
-      // Meeting in 1 hour
-      await sendWhatsApp(phone, 'democall_reminder_ar', { name: booking.attendees[0].name });
+      console.log('[INFO] Meeting in 1 hour. Sending reminder template...');
+      await sendWhatsApp(phone, 'democall_reminder_ar', { name: attendeeName });
     } else if (Math.abs(diff - FIVE_MIN) < 60 * 1000) {
-      // Meeting in 5 minutes
-      await sendWhatsApp(phone, 'democall_reminder_ar', { name: booking.attendees[0].name });
+      console.log('[INFO] Meeting in 5 minutes. Sending reminder template...');
+      await sendWhatsApp(phone, 'democall_reminder_ar', { name: attendeeName });
+    } else {
+      console.log('[INFO] No action needed for this booking at this time.');
     }
   }
 }
 
 // Start cron
-console.log('Booking reminder service running...');
+console.log('[INFO] Booking reminder service running...');
 setInterval(checkBookingsAndSendMessages, 60 * 1000);
