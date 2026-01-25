@@ -1,6 +1,6 @@
-import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
+import http from "http";
 
 dotenv.config();
 
@@ -13,99 +13,79 @@ const {
   PORT
 } = process.env;
 
-const app = express();
-app.get("/", (req, res) => res.send("Bot running"));
-
-let lastCheck = new Date(Date.now() - 60 * 1000).toISOString();
 const processedBookings = new Set();
 
-console.log("Booking service running...");
+/* ---------------- CAL FETCH ---------------- */
 
-setInterval(checkBookings, 60000);
-
-async function checkBookings() {
-  console.log("🔍 Checking bookings since", lastCheck);
-
+async function fetchBookings() {
   try {
+    console.log("🔍 Checking bookings...");
+
     const res = await axios.get("https://api.cal.com/v2/bookings", {
       headers: {
         Authorization: `Bearer ${CAL_API_KEY}`,
-        "cal-api-version": "2024-08-13"
+        "cal-api-version": "2024-08-13",
       },
       params: {
         organizationId: CAL_ORG_ID,
-        updatedAfter: lastCheck,
-        status: "accepted"
-      }
+        status: "accepted",
+      },
     });
 
     const bookings = res.data.data || [];
     console.log(`📦 Fetched ${bookings.length} bookings`);
 
     for (const booking of bookings) {
+      if (processedBookings.has(booking.id)) continue;
       await processBooking(booking);
+      processedBookings.add(booking.id);
     }
-
-    lastCheck = new Date().toISOString();
-
   } catch (err) {
-    console.error("❌ Cal fetch error:", err.response?.data || err.message);
+    console.error("❌ Cal API error:", err.response?.data || err.message);
   }
 }
 
-async function processBooking(booking) {
-  if (processedBookings.has(booking.id)) return;
+/* ---------------- BOOKING PROCESS ---------------- */
 
+async function processBooking(booking) {
   console.log(`➡️ Processing booking ${booking.id}`);
 
-  const start = booking.start;
-  if (!start) {
-    console.log(`❌ No start date for booking ${booking.id}`);
-    return;
-  }
+  const startDate = new Date(booking.start);
 
-  const dateObj = new Date(start);
-  if (isNaN(dateObj)) {
+  if (isNaN(startDate.getTime())) {
     console.log(`❌ Invalid date for booking ${booking.id}`);
     return;
   }
 
   const attendee = booking.attendees?.[0];
-  const name = attendee?.name || "Customer";
 
-  // TRY TO GET PHONE
-  const phone =
-    booking.bookingFieldsResponses?.phone ||
-    booking.metadata?.phone ||
-    null;
-
-  if (!phone) {
-    console.log(`❌ No phone number for booking ${booking.id}`);
+  if (!attendee?.email) {
+    console.log(`❌ No attendee email for booking ${booking.id}`);
     return;
   }
 
-  const date = dateObj.toLocaleDateString("ar-EG");
-  const time = dateObj.toLocaleTimeString("ar-EG", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  const name = attendee.name || "Customer";
+  const email = attendee.email;
 
-  await sendWhatsApp(phone, name, date, time);
-  processedBookings.add(booking.id);
+  const message = `Hello ${name}, your onboarding call is confirmed for ${startDate.toUTCString()}.`;
+
+  console.log(`📨 Sending message to ${email}`);
+
+  await sendWhatsApp(email, message);
 }
 
-async function sendWhatsApp(phone, name, date, time) {
-  console.log("📤 Sending WhatsApp to", phone);
+/* ---------------- WHATSAPP SEND (OTPIQ) ---------------- */
 
+async function sendWhatsApp(to, text) {
   try {
     await axios.post(
-      "https://api.otpiq.com/v1/whatsapp/template",
+      `https://api.otpiq.com/v1/whatsapp/send`,
       {
         phone_id: OTPIQ_PHONE_ID,
         sender_id: OTPIQ_SENDER_ID,
-        to: phone,
-        template: "democall_booking_ar",
-        parameters: [name, date, time]
+        to,
+        type: "text",
+        text: { body: text }
       },
       {
         headers: {
@@ -115,11 +95,22 @@ async function sendWhatsApp(phone, name, date, time) {
       }
     );
 
-    console.log("✅ WhatsApp sent");
-
+    console.log("✅ Message sent");
   } catch (err) {
-    console.error("❌ WhatsApp error:", err.response?.data || err.message);
+    console.error("❌ WhatsApp send failed:", err.response?.data || err.message);
   }
 }
 
-app.listen(PORT, () => console.log("Server started"));
+/* ---------------- SERVER (required by host) ---------------- */
+
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end("Bot running");
+  })
+  .listen(PORT, () => console.log(`Server started on ${PORT}`));
+
+/* ---------------- POLL LOOP ---------------- */
+
+setInterval(fetchBookings, 60 * 1000);
+console.log("Booking service running...");
