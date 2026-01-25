@@ -1,16 +1,28 @@
-require('dotenv').config();
 const axios = require('axios');
 
-const CAL_API_KEY = process.env.CAL_API_KEY;
-const OTPIQ_API_KEY = process.env.OTPIQ_API_KEY;
-const OTPIQ_SENDER_ID = process.env.OTPIQ_SENDER_ID;
+// ===== ENV VARIABLES =====
+const {
+  CAL_API_KEY,
+  CAL_ORG_ID,        // not required for /v2/bookings but kept for future use
+  OTPIQ_API_KEY,
+  OTPIQ_PHONE_ID,    // WhatsApp phone number ID
+  OTPIQ_SENDER_ID,   // WhatsApp account ID
+  PORT = 3000
+} = process.env;
 
-let lastCheck = new Date().toISOString();
+if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_PHONE_ID || !OTPIQ_SENDER_ID) {
+  console.error('Missing required environment variables');
+  process.exit(1);
+}
 
-console.log('Booking and reminder service running...');
+console.log('Booking service running...');
+
+// Prevent duplicate sends
+const processedBookings = new Set();
+let lastCheckTime = new Date(Date.now() - 60 * 1000).toISOString();
 
 async function checkBookings() {
-  console.log(`Checking bookings since ${lastCheck}`);
+  console.log(`Checking bookings since ${lastCheckTime}`);
 
   try {
     const res = await axios.get('https://api.cal.com/v2/bookings', {
@@ -18,52 +30,59 @@ async function checkBookings() {
         Authorization: `Bearer ${CAL_API_KEY}`,
         'cal-api-version': '2024-08-13',
       },
-      params: {
-        status: 'upcoming',
-      },
     });
 
-    const bookings = res.data.data || [];
-    console.log(`Found ${bookings.length} upcoming bookings`);
+    const bookings = res.data?.data || [];
+    console.log(`Found ${bookings.length} bookings`);
+
+    const newLastCheck = new Date().toISOString();
 
     for (const booking of bookings) {
-      console.log('Raw booking object:', booking);
+      if (processedBookings.has(booking.id)) continue;
 
-      const attendee = booking.attendees?.[0]; // assuming first attendee
+      const createdAt = new Date(booking.createdAt);
+      if (createdAt < new Date(lastCheckTime)) continue;
+
+      const attendee = booking.attendees?.[0];
+
       if (!attendee?.phoneNumber) {
-        console.log(`Skipping booking ${booking.id} - no phone number`);
+        console.log(`Skipping booking ${booking.id} - no phone`);
         continue;
       }
 
-      const startTime = booking.startTime ? new Date(booking.startTime) : null;
-      const dateStr = startTime
-        ? startTime.toLocaleDateString('en-GB')
-        : 'Invalid Date';
-      const timeStr = startTime
-        ? startTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-        : 'Invalid Date';
+      const startTime = new Date(booking.startTime);
+      if (isNaN(startTime)) {
+        console.log(`Skipping booking ${booking.id} - invalid date`);
+        continue;
+      }
 
-      let phone = attendee.phoneNumber;
-      if (!phone.startsWith('+')) phone = '+' + phone;
+      const phone = attendee.phoneNumber.replace(/\D/g, '');
 
-      console.log(
-        `Sending WhatsApp democall_booking_ar to ${phone}`,
-        { name: attendee.name || 'N/A', date: dateStr, time: timeStr }
-      );
+      const dateStr = startTime.toLocaleDateString('en-GB');
+      const timeStr = startTime.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      console.log(`Sending booking template → ${phone}`, {
+        name: attendee.name,
+        date: dateStr,
+        time: timeStr,
+      });
 
       try {
-        const sendRes = await axios.post(
+        await axios.post(
           'https://api.otpiq.com/api/sms',
           {
             phoneNumber: phone,
             smsType: 'whatsapp-template',
             provider: 'whatsapp',
             templateName: 'democall_booking_ar',
-            whatsappAccountId: OTPIQ_SENDER_ID,
-            whatsappPhoneId: OTPIQ_SENDER_ID,
+            whatsappAccountId: OTPIQ_SENDER_ID,   // sender/account
+            whatsappPhoneId: OTPIQ_PHONE_ID,      // phone ID
             templateParameters: {
               body: {
-                name: attendee.name || 'N/A',
+                name: attendee.name || 'Customer',
                 date: dateStr,
                 time: timeStr,
               },
@@ -76,18 +95,27 @@ async function checkBookings() {
             },
           }
         );
-        console.log('WhatsApp sent:', sendRes.data);
-      } catch (err) {
-        console.error('WhatsApp error:', err.response?.data || err.message);
+
+        console.log(`WhatsApp sent for booking ${booking.id}`);
+        processedBookings.add(booking.id);
+
+      } catch (waErr) {
+        console.error('WhatsApp error:', waErr.response?.data || waErr.message);
       }
     }
 
-    lastCheck = new Date().toISOString();
+    lastCheckTime = newLastCheck;
+
   } catch (err) {
-    console.error('Error in checkBookings:', err.response?.data || err.message);
+    console.error('Cal API error:', err.response?.data || err.message);
   }
 }
 
 // Run every minute
 setInterval(checkBookings, 60 * 1000);
 checkBookings();
+
+// Keep Railway container alive
+require('http')
+  .createServer((req, res) => res.end('OK'))
+  .listen(PORT);
