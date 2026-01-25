@@ -5,67 +5,68 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-const CAL_API_KEY = process.env.CAL_API_KEY;
-const CAL_ORG_ID = process.env.CAL_ORG_ID;
-const OTPIQ_API_KEY = process.env.OTPIQ_API_KEY;
-const OTPIQ_SENDER_ID = process.env.OTPIQ_SENDER_ID;
 const PORT = process.env.PORT || 3000;
 
-// Helper to send WhatsApp via OTPIQ
-async function sendWhatsApp(phoneNumber, templateName, templateParams = {}) {
+// OTPIQ WhatsApp send function
+async function sendWhatsApp(phoneNumber, templateName, templateParameters = {}) {
   try {
-    console.log(`[INFO] Sending WhatsApp to ${phoneNumber} using template ${templateName}`);
-    const res = await axios.post('https://api.otpiq.com/api/sms', {
+    console.log(`Sending WhatsApp template "${templateName}" to ${phoneNumber}...`);
+    const response = await axios.post('https://api.otpiq.com/api/sms', {
       phoneNumber,
       smsType: 'whatsapp-template',
       provider: 'whatsapp',
       templateName,
-      whatsappAccountId: OTPIQ_SENDER_ID,
-      whatsappPhoneId: OTPIQ_SENDER_ID,
-      templateParameters: { body: templateParams }
+      whatsappAccountId: process.env.OTPIQ_SENDER_ID,
+      whatsappPhoneId: process.env.OTPIQ_PHONE_ID,
+      templateParameters
     }, {
       headers: {
-        'Authorization': `Bearer ${OTPIQ_API_KEY}`,
+        'Authorization': `Bearer ${process.env.OTPIQ_API_KEY}`,
         'Content-Type': 'application/json'
       }
     });
-    console.log(`[SUCCESS] WhatsApp sent to ${phoneNumber}:`, res.data);
-  } catch (err) {
-    console.error(`[ERROR] WhatsApp send failed for ${phoneNumber}:`, err.response?.data || err.message);
+
+    console.log('WhatsApp sent:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('WhatsApp error:', error.response?.data || error.message);
   }
 }
 
-// Webhook route for Cal
+// Webhook endpoint for Cal.com
 app.post('/cal-webhook', async (req, res) => {
-  console.log('[INFO] Webhook received:', JSON.stringify(req.body, null, 2));
+  try {
+    console.log('Webhook received:', JSON.stringify(req.body, null, 2));
 
-  const event = req.body.triggerEvent;
-  if (event === 'BOOKING_CREATED') {
-    try {
-      const booking = req.body.payload;
-      const attendee = booking.attendees?.[0];
-      if (!attendee?.phoneNumber) {
-        console.warn(`[WARN] Booking ${booking.id} has no phone number. Skipping WhatsApp.`);
-        return res.status(200).send('No phone number to send.');
-      }
+    const { triggerEvent, payload } = req.body;
 
-      // Send booking confirmation immediately
-      await sendWhatsApp(attendee.phoneNumber, 'democall_booking_ar', {
-        name: attendee.name || 'Guest'
-      });
-
-      res.status(200).send('Booking processed.');
-    } catch (err) {
-      console.error('[ERROR] Failed to process booking webhook:', err.message);
-      res.status(500).send('Internal error.');
+    if (!payload || !payload.attendees || payload.attendees.length === 0) {
+      console.warn('No attendees found in payload');
+      return res.status(400).send('No attendees found');
     }
-  } else {
-    console.log(`[INFO] Ignoring event type: ${event}`);
-    res.status(200).send('Event ignored.');
+
+    const attendee = payload.attendees[0];
+    const phoneNumber = attendee.responses?.phoneNumber || attendee.attendeePhoneNumber?.value;
+
+    if (!phoneNumber) {
+      console.warn('No phone number for attendee');
+      return res.status(400).send('No phone number');
+    }
+
+    if (triggerEvent === 'BOOKING_CREATED') {
+      await sendWhatsApp(phoneNumber, 'democall_booking_ar', { body: {} });
+    } else if (triggerEvent === 'BOOKING_REMINDER') {
+      // You can trigger reminders using a separate webhook or cron
+      await sendWhatsApp(phoneNumber, 'democall_reminder_ar', { body: {} });
+    }
+
+    res.status(200).send('Webhook processed');
+  } catch (err) {
+    console.error('Webhook error:', err);
+    res.status(500).send('Server error');
   }
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`[INFO] Webhook server listening on port ${PORT}`);
+  console.log(`Webhook server listening on port ${PORT}`);
 });
