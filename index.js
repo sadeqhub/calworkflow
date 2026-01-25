@@ -10,12 +10,12 @@ app.use(express.json());
 const {
   CAL_API_KEY,
   OTPIQ_API_KEY,
+  OTPIQ_ACCOUNT_ID,
   OTPIQ_PHONE_ID,
-  OTPIQ_SENDER_ID,
   PORT = 3000
 } = process.env;
 
-if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_PHONE_ID || !OTPIQ_SENDER_ID) {
+if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
   console.error("❌ Missing ENV variables");
   process.exit(1);
 }
@@ -41,13 +41,26 @@ async function sendWhatsApp(phone, name, date, time) {
   try {
     console.log(`📤 Sending WhatsApp to ${phone}`);
 
+    // Remove + prefix if present, as API expects plain number
+    const phoneNumber = phone.startsWith("+") ? phone.slice(1) : phone;
+
     const res = await axios.post(
-      `https://api.otpiq.com/whatsapp/${OTPIQ_PHONE_ID}/send-template`,
+      "https://api.otpiq.com/api/sms",
       {
-        sender: OTPIQ_SENDER_ID,
-        to: phone,
-        template: "democall_booking_ar",
-        variables: [name, date, time]
+        phoneNumber: phoneNumber,
+        smsType: "whatsapp-template",
+        provider: "whatsapp",
+        templateName: "democall_booking_ar",
+        whatsappAccountId: OTPIQ_ACCOUNT_ID,
+        whatsappPhoneId: OTPIQ_PHONE_ID,
+        templateParameters: {
+          body: {
+            // WhatsApp template variables are typically passed as 1, 2, 3, etc.
+            "1": name,
+            "2": date,
+            "3": time
+          }
+        }
       },
       {
         headers: {
