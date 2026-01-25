@@ -1,67 +1,48 @@
+require("dotenv").config();
 const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
 const dayjs = require("dayjs");
 const fs = require("fs");
-require("dotenv").config();
 
+const app = express();
+app.use(bodyParser.json());
+
+const PORT = process.env.PORT || 3000;
 const CAL_API_KEY = process.env.CAL_API_KEY;
 const ORG_ID = process.env.ORG_ID;
 const OTPIQ_API_KEY = process.env.OTPIQ_API_KEY;
 const OTPIQ_SENDER_ID = process.env.OTPIQ_SENDER_ID;
 
-// ===== Persistent store to prevent duplicate reminders =====
-const STORE_FILE = "sentReminders.json";
+// Store sent reminders to avoid duplicates
+const SENT_FILE = "sentReminders.json";
 let sentReminders = {};
-try {
-  sentReminders = JSON.parse(fs.readFileSync(STORE_FILE, "utf8"));
-} catch {
-  sentReminders = {};
+if (fs.existsSync(SENT_FILE)) {
+  sentReminders = JSON.parse(fs.readFileSync(SENT_FILE));
 }
 
-function saveStore() {
-  fs.writeFileSync(STORE_FILE, JSON.stringify(sentReminders, null, 2));
-}
-
-// ===== Helpers =====
-function getMeetingId(url) {
-  if (!url) return null;
-  const parts = url.split("/");
-  return parts[parts.length - 1];
-}
-
-function minutesDiff(dateStr) {
-  const meeting = dayjs(dateStr);
-  const now = dayjs();
-  return meeting.diff(now, "minute");
-}
-
-// ===== Send WhatsApp =====
+// ---------------- WhatsApp helper ----------------
 async function sendWhatsApp({ phone, templateName, params }) {
   try {
     await axios.post(
-      "https://api.otpiq.com/whatsapp/template/send",
+      "https://api.otpiq.com/v1/messages",
       {
-        sender_id: OTPIQ_SENDER_ID,
+        sender: OTPIQ_SENDER_ID,
         recipient: phone,
-        template_name: templateName,
-        language: "ar",
-        parameters: params,
+        template: templateName,
+        params,
       },
       {
-        headers: {
-          Authorization: `Bearer ${OTPIQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${OTPIQ_API_KEY}` },
       }
     );
-    console.log(`Sent WhatsApp ${templateName} to ${phone}`);
+    console.log(`WhatsApp sent to ${phone} using template ${templateName}`);
   } catch (err) {
-    console.error("WhatsApp send error:", err.response?.data || err.message);
+    console.error("WhatsApp error:", err.response?.data || err.message);
   }
 }
 
-// ===== Scheduler for 1h / 5min reminders =====
+// ---------------- Scheduler ----------------
 async function checkBookings() {
   try {
     const res = await axios.get(
@@ -73,88 +54,90 @@ async function checkBookings() {
     );
 
     const bookings = res.data.data || [];
+    const now = dayjs();
 
     for (const booking of bookings) {
-      if (!booking.start || !booking.attendees?.length) continue;
+      const start = dayjs(booking.start);
+      const diffMinutes = start.diff(now, "minute");
 
-      const diff = minutesDiff(booking.start);
-      let reminderType = null;
-      let timeText = null;
+      const attendee = booking.attendees?.[0];
+      if (!attendee?.phoneNumber) continue;
 
-      if (diff >= 59 && diff <= 61) {
-        reminderType = "1h";
-        timeText = "بعد ساعة";
-      } else if (diff >= 4 && diff <= 6) {
-        reminderType = "5m";
-        timeText = "بعد خمس دقائق";
+      const phone = attendee.phoneNumber;
+      const name = attendee.name || "Guest";
+      const date = start.format("YYYY-MM-DD");
+      const time = start.format("HH:mm");
+
+      // Reminder: 1 hour
+      if (diffMinutes === 60 && !sentReminders[booking.uid + "_1h"]) {
+        await sendWhatsApp({
+          phone,
+          templateName: "democall_reminder_ar",
+          params: [name, "one hour", `http://meet.google.com/${booking.meetingUrl || booking.uid}`],
+        });
+        sentReminders[booking.uid + "_1h"] = true;
       }
 
-      if (!reminderType) continue;
-
-      const meetingUrl = booking.location || booking.meetingUrl;
-      const meetingId = getMeetingId(meetingUrl);
-      if (!meetingId) continue;
-
-      for (const attendee of booking.attendees) {
-        if (!attendee.phoneNumber) continue;
-
-        const key = `${booking.uid}_${attendee.phoneNumber}_${reminderType}`;
-        if (sentReminders[key]) continue;
-
+      // Reminder: 5 minutes
+      if (diffMinutes === 5 && !sentReminders[booking.uid + "_5m"]) {
         await sendWhatsApp({
-          phone: attendee.phoneNumber,
+          phone,
           templateName: "democall_reminder_ar",
-          params: [attendee.name || "Guest", timeText, `http://meet.google.com/${meetingId}`],
+          params: [name, "five minutes", `http://meet.google.com/${booking.meetingUrl || booking.uid}`],
         });
-
-        sentReminders[key] = Date.now();
-        saveStore();
+        sentReminders[booking.uid + "_5m"] = true;
       }
     }
+
+    fs.writeFileSync(SENT_FILE, JSON.stringify(sentReminders));
   } catch (err) {
-    console.error("Error in checkBookings:", err.message);
+    console.error("Error in checkBookings:", err.response?.data || err.message);
   }
 }
 
-// ===== Express webhook server =====
-const app = express();
-app.use(bodyParser.json());
+// Run scheduler every minute
+setInterval(checkBookings, 60 * 1000);
 
+// ---------------- Webhook ----------------
 app.post("/cal-webhook", async (req, res) => {
-  try {
-    const booking = req.body;
+  console.log("Webhook received:", JSON.stringify(req.body, null, 2));
 
-    // Cal sends booking info in JSON
-    const attendee = booking.attendees?.[0]; // assume first attendee
-    if (!attendee?.phoneNumber) {
-      return res.status(400).send("No attendee phone");
+  try {
+    const booking = req.body.payload || req.body; // Support test payload and real payload
+
+    const attendee = booking.attendees?.[0];
+    if (!attendee) {
+      console.log("No attendees in payload, skipping WhatsApp");
+      return res.status(200).send("OK");
     }
 
+    const phone = attendee.phoneNumber || null; // may be missing in test
     const name = attendee.name || "Guest";
-    const start = dayjs(booking.start);
+
+    const startTime = booking.start || booking.startTime || new Date().toISOString();
+    const start = dayjs(startTime);
     const date = start.format("YYYY-MM-DD");
     const time = start.format("HH:mm");
 
-    await sendWhatsApp({
-      phone: attendee.phoneNumber,
-      templateName: "democall_booking_ar",
-      params: [name, date, time],
-    });
+    if (!phone) {
+      console.log(`No phone number for ${name}, cannot send WhatsApp. Booking at ${date} ${time}`);
+    } else {
+      await sendWhatsApp({
+        phone,
+        templateName: "democall_booking_ar",
+        params: [name, date, time],
+      });
+      console.log(`WhatsApp sent to ${name} at ${date} ${time}`);
+    }
 
-    console.log(`Booking confirmed for ${name} at ${date} ${time}`);
-    res.status(200).send("OK");
+    res.status(200).send("OK"); // Always respond 200 to Cal.com
   } catch (err) {
-    console.error("Webhook error:", err.message);
+    console.error("Webhook error:", err);
     res.status(500).send("Error");
   }
 });
 
-// ===== Start server + scheduler =====
-const PORT = process.env.PORT || 3000;
+// ---------------- Start server ----------------
 app.listen(PORT, () => {
   console.log(`Webhook server listening on port ${PORT}`);
 });
-
-// Run scheduler every minute
-checkBookings();
-setInterval(checkBookings, 60 * 1000);
