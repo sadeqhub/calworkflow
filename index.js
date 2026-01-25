@@ -1,21 +1,106 @@
+import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
-import http from "http";
 
 dotenv.config();
 
+const app = express();
+app.use(express.json());
+
 const {
   CAL_API_KEY,
-  CAL_ORG_ID,
   OTPIQ_API_KEY,
   OTPIQ_PHONE_ID,
   OTPIQ_SENDER_ID,
-  PORT
+  PORT = 3000
 } = process.env;
+
+if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_PHONE_ID || !OTPIQ_SENDER_ID) {
+  console.error("❌ Missing ENV variables");
+  process.exit(1);
+}
 
 const processedBookings = new Set();
 
-/* ---------------- CAL FETCH ---------------- */
+app.get("/", (_, res) => res.send("OK"));
+app.listen(PORT, () => console.log("Server started on", PORT));
+
+console.log("Booking service running...");
+
+function formatDateParts(isoString) {
+  const d = new Date(isoString);
+  if (isNaN(d)) return null;
+
+  return {
+    date: d.toLocaleDateString("en-GB"), // 26/01/2026
+    time: d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  };
+}
+
+async function sendWhatsApp(phone, name, date, time) {
+  try {
+    console.log(`📤 Sending WhatsApp to ${phone}`);
+
+    const res = await axios.post(
+      `https://api.otpiq.com/whatsapp/${OTPIQ_PHONE_ID}/send-template`,
+      {
+        sender: OTPIQ_SENDER_ID,
+        to: phone,
+        template: "democall_booking_ar",
+        variables: [name, date, time]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OTPIQ_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    console.log("✅ WhatsApp sent:", res.data);
+  } catch (err) {
+    console.error("❌ WhatsApp error:", err.response?.data || err.message);
+  }
+}
+
+function extractPhone(booking) {
+  const phone =
+    booking.bookingFieldsResponses?.phone ||
+    booking.bookingFieldsResponses?.phoneNumber ||
+    booking.metadata?.phone;
+
+  if (!phone) return null;
+
+  return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+async function processBooking(booking) {
+  console.log(`➡️ Processing booking ${booking.id}`);
+
+  if (!booking.start) {
+    console.log("❌ No start date");
+    return;
+  }
+
+  const dateParts = formatDateParts(booking.start);
+  if (!dateParts) {
+    console.log("❌ Invalid date");
+    return;
+  }
+
+  const phone = extractPhone(booking);
+  if (!phone) {
+    console.log("❌ No phone number in booking form");
+    return;
+  }
+
+  const name =
+    booking.attendees?.[0]?.name ||
+    booking.bookingFieldsResponses?.name ||
+    "Guest";
+
+  await sendWhatsApp(phone, name, dateParts.date, dateParts.time);
+}
 
 async function fetchBookings() {
   try {
@@ -24,12 +109,12 @@ async function fetchBookings() {
     const res = await axios.get("https://api.cal.com/v2/bookings", {
       headers: {
         Authorization: `Bearer ${CAL_API_KEY}`,
-        "cal-api-version": "2024-08-13",
+        "cal-api-version": "2024-08-13"
       },
       params: {
-        organizationId: CAL_ORG_ID,
         status: "accepted",
-      },
+        limit: 20
+      }
     });
 
     const bookings = res.data.data || [];
@@ -45,72 +130,5 @@ async function fetchBookings() {
   }
 }
 
-/* ---------------- BOOKING PROCESS ---------------- */
-
-async function processBooking(booking) {
-  console.log(`➡️ Processing booking ${booking.id}`);
-
-  const startDate = new Date(booking.start);
-
-  if (isNaN(startDate.getTime())) {
-    console.log(`❌ Invalid date for booking ${booking.id}`);
-    return;
-  }
-
-  const attendee = booking.attendees?.[0];
-
-  if (!attendee?.email) {
-    console.log(`❌ No attendee email for booking ${booking.id}`);
-    return;
-  }
-
-  const name = attendee.name || "Customer";
-  const email = attendee.email;
-
-  const message = `Hello ${name}, your onboarding call is confirmed for ${startDate.toUTCString()}.`;
-
-  console.log(`📨 Sending message to ${email}`);
-
-  await sendWhatsApp(email, message);
-}
-
-/* ---------------- WHATSAPP SEND (OTPIQ) ---------------- */
-
-async function sendWhatsApp(to, text) {
-  try {
-    await axios.post(
-      `https://api.otpiq.com/v1/whatsapp/send`,
-      {
-        phone_id: OTPIQ_PHONE_ID,
-        sender_id: OTPIQ_SENDER_ID,
-        to,
-        type: "text",
-        text: { body: text }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OTPIQ_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    console.log("✅ Message sent");
-  } catch (err) {
-    console.error("❌ WhatsApp send failed:", err.response?.data || err.message);
-  }
-}
-
-/* ---------------- SERVER (required by host) ---------------- */
-
-http
-  .createServer((req, res) => {
-    res.writeHead(200);
-    res.end("Bot running");
-  })
-  .listen(PORT, () => console.log(`Server started on ${PORT}`));
-
-/* ---------------- POLL LOOP ---------------- */
-
 setInterval(fetchBookings, 60 * 1000);
-console.log("Booking service running...");
+fetchBookings();
