@@ -112,7 +112,7 @@ async function fetchBookings() {
         "cal-api-version": "2024-08-13"
       },
       params: {
-        status: "ACCEPTED",
+        status: "upcoming",
         limit: 20
       }
     });
@@ -120,7 +120,13 @@ async function fetchBookings() {
     const bookings = res.data.data || [];
     console.log(`📦 Fetched ${bookings.length} bookings`);
 
-    for (const booking of bookings) {
+    // Filter to only process accepted bookings
+    const acceptedBookings = bookings.filter(
+      booking => booking.status === "ACCEPTED" || booking.status === "accepted"
+    );
+    console.log(`✅ Found ${acceptedBookings.length} accepted bookings`);
+
+    for (const booking of acceptedBookings) {
       if (processedBookings.has(booking.id)) continue;
       await processBooking(booking);
       processedBookings.add(booking.id);
