@@ -1,72 +1,100 @@
 require('dotenv').config();
-const express = require('express');
 const axios = require('axios');
 
-const app = express();
-app.use(express.json());
+const CAL_API_KEY = process.env.CAL_API_KEY;
+const CAL_ORG_ID = process.env.CAL_ORG_ID;
+const OTPIQ_API_KEY = process.env.OTPIQ_API_KEY;
+const OTPIQ_SENDER_ID = process.env.OTPIQ_SENDER_ID;
+const OTPIQ_PHONE_ID = process.env.OTPIQ_PHONE_ID;
 
-const PORT = process.env.PORT || 3000;
+const checkInterval = 60 * 1000; // 1 minute
+let lastCheck = new Date().toISOString();
 
-// OTPIQ WhatsApp send function
+// Track sent messages to avoid duplicates
+const sentMessages = {
+  booking: new Set(),
+  reminder1h: new Set(),
+  reminder5m: new Set()
+};
+
+console.log('Booking and reminder service running...');
+
 async function sendWhatsApp(phoneNumber, templateName, templateParameters = {}) {
   try {
-    console.log(`Sending WhatsApp template "${templateName}" to ${phoneNumber}...`);
-    const response = await axios.post('https://api.otpiq.com/api/sms', {
+    console.log(`Sending WhatsApp template "${templateName}" to ${phoneNumber} with params`, templateParameters);
+    const res = await axios.post('https://api.otpiq.com/api/sms', {
       phoneNumber,
       smsType: 'whatsapp-template',
       provider: 'whatsapp',
       templateName,
-      whatsappAccountId: process.env.OTPIQ_SENDER_ID,
-      whatsappPhoneId: process.env.OTPIQ_PHONE_ID,
+      whatsappAccountId: OTPIQ_SENDER_ID,
+      whatsappPhoneId: OTPIQ_PHONE_ID,
       templateParameters
     }, {
       headers: {
-        'Authorization': `Bearer ${process.env.OTPIQ_API_KEY}`,
+        'Authorization': `Bearer ${OTPIQ_API_KEY}`,
         'Content-Type': 'application/json'
       }
     });
 
-    console.log('WhatsApp sent:', response.data);
-    return response.data;
-  } catch (error) {
-    console.error('WhatsApp error:', error.response?.data || error.message);
+    console.log('WhatsApp sent:', res.data);
+  } catch (err) {
+    console.error('WhatsApp error:', err.response?.data || err.message);
   }
 }
 
-// Webhook endpoint for Cal.com
-app.post('/cal-webhook', async (req, res) => {
+async function checkBookings() {
   try {
-    console.log('Webhook received:', JSON.stringify(req.body, null, 2));
+    console.log('Checking bookings since', lastCheck);
+    const response = await axios.get(`https://api.cal.com/v2/organizations/${CAL_ORG_ID}/bookings?status=upcoming&take=100`, {
+      headers: { Authorization: `Bearer ${CAL_API_KEY}` }
+    });
 
-    const { triggerEvent, payload } = req.body;
+    const bookings = response.data?.data || [];
+    const now = new Date();
 
-    if (!payload || !payload.attendees || payload.attendees.length === 0) {
-      console.warn('No attendees found in payload');
-      return res.status(400).send('No attendees found');
+    for (let booking of bookings) {
+      const bookingId = booking.id;
+      const startTime = new Date(booking.startTime);
+      const attendee = booking.attendees?.[0];
+
+      if (!attendee || !attendee.responses?.phoneNumber) {
+        console.warn('No phone number for attendee', bookingId);
+        continue;
+      }
+
+      const phoneNumber = attendee.responses.phoneNumber;
+      const name = attendee.responses.name || attendee.name || '';
+      const date = startTime.toLocaleDateString('en-GB');
+      const time = startTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+      // 1️⃣ New booking: send immediately
+      if (!sentMessages.booking.has(bookingId) && new Date(booking.createdAt) > new Date(lastCheck)) {
+        await sendWhatsApp(phoneNumber, 'democall_booking_ar', { body: { name, date, time } });
+        sentMessages.booking.add(bookingId);
+      }
+
+      // 2️⃣ 1 hour before meeting
+      const diffMs = startTime - now;
+      const diffMinutes = diffMs / (1000 * 60);
+
+      if (!sentMessages.reminder1h.has(bookingId) && diffMinutes <= 60 && diffMinutes > 59) {
+        await sendWhatsApp(phoneNumber, 'democall_reminder_ar', { body: { name, date, time } });
+        sentMessages.reminder1h.add(bookingId);
+      }
+
+      // 3️⃣ 5 minutes before meeting
+      if (!sentMessages.reminder5m.has(bookingId) && diffMinutes <= 5 && diffMinutes > 4) {
+        await sendWhatsApp(phoneNumber, 'democall_reminder_ar', { body: { name, date, time } });
+        sentMessages.reminder5m.add(bookingId);
+      }
     }
 
-    const attendee = payload.attendees[0];
-    const phoneNumber = attendee.responses?.phoneNumber || attendee.attendeePhoneNumber?.value;
-
-    if (!phoneNumber) {
-      console.warn('No phone number for attendee');
-      return res.status(400).send('No phone number');
-    }
-
-    if (triggerEvent === 'BOOKING_CREATED') {
-      await sendWhatsApp(phoneNumber, 'democall_booking_ar', { body: {} });
-    } else if (triggerEvent === 'BOOKING_REMINDER') {
-      // You can trigger reminders using a separate webhook or cron
-      await sendWhatsApp(phoneNumber, 'democall_reminder_ar', { body: {} });
-    }
-
-    res.status(200).send('Webhook processed');
+    lastCheck = now.toISOString();
   } catch (err) {
-    console.error('Webhook error:', err);
-    res.status(500).send('Server error');
+    console.error('Error in checkBookings:', err.response?.data || err.message);
   }
-});
+}
 
-app.listen(PORT, () => {
-  console.log(`Webhook server listening on port ${PORT}`);
-});
+// Run every minute
+setInterval(checkBookings, checkInterval);
