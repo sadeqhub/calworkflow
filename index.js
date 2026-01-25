@@ -112,7 +112,7 @@ async function fetchBookings() {
         "cal-api-version": "2024-08-13"
       },
       params: {
-        status: "accepted",
+        status: "ACCEPTED",
         limit: 20
       }
     });
@@ -126,7 +126,11 @@ async function fetchBookings() {
       processedBookings.add(booking.id);
     }
   } catch (err) {
-    console.error("❌ Cal API error:", err.response?.data || err.message);
+    const errorData = err.response?.data || {};
+    console.error("❌ Cal API error:", JSON.stringify(errorData, null, 2));
+    if (errorData.details?.errors) {
+      console.error("Error details:", JSON.stringify(errorData.details.errors, null, 2));
+    }
   }
 }
 
