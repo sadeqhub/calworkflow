@@ -21,6 +21,7 @@ if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
 }
 
 const processedBookings = new Set();
+const serviceStartTime = new Date();
 
 app.get("/", (_, res) => res.send("OK"));
 app.listen(PORT, () => console.log("Server started on", PORT));
@@ -190,8 +191,35 @@ async function fetchBookings() {
     );
     console.log(`✅ Found ${acceptedBookings.length} accepted bookings`);
 
-    for (const booking of acceptedBookings) {
-      if (processedBookings.has(booking.id)) continue;
+    // Only process bookings created in the last 5 minutes (newly created)
+    const now = new Date();
+    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+    
+    const newBookings = acceptedBookings.filter(booking => {
+      // Skip if already processed
+      if (processedBookings.has(booking.id)) return false;
+      
+      // Check if booking was created recently - try multiple possible field names
+      const createdAtStr = booking.createdAt || booking.created_at || booking.created || booking.timeSlot?.start;
+      const createdAt = createdAtStr ? new Date(createdAtStr) : null;
+      
+      if (!createdAt || isNaN(createdAt.getTime())) {
+        // If no valid timestamp found, skip this booking
+        console.log(`⏭️  Skipping booking ${booking.id} - no valid creation timestamp`);
+        return false;
+      }
+      
+      // Only process bookings created in the last 5 minutes
+      const isRecent = createdAt >= fiveMinutesAgo;
+      if (!isRecent) {
+        console.log(`⏭️  Skipping booking ${booking.id} - created ${Math.round((now - createdAt) / 1000 / 60)} minutes ago`);
+      }
+      return isRecent;
+    });
+
+    console.log(`🆕 Found ${newBookings.length} newly created bookings (last 5 minutes)`);
+
+    for (const booking of newBookings) {
       await processBooking(booking);
       processedBookings.add(booking.id);
     }
