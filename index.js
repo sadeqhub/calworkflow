@@ -59,22 +59,51 @@ async function sendWhatsApp(phone, name, date, time) {
 
     console.log("✅ WhatsApp sent:", res.data);
   } catch (err) {
-    console.error("❌ WhatsApp error:", err.response?.data || err.message);
+    const errorDetails = {
+      message: err.message,
+      status: err.response?.status,
+      statusText: err.response?.statusText,
+      data: err.response?.data,
+      url: err.config?.url
+    };
+    console.error("❌ WhatsApp error:", JSON.stringify(errorDetails, null, 2));
   }
 }
 
 function extractPhone(booking) {
   // Try multiple possible locations for phone number
-  const phone =
+  let phone =
     booking.responses?.phone?.value ||
     booking.responses?.phoneNumber?.value ||
     booking.responses?.phone?.label ||
     booking.responses?.phoneNumber?.label ||
     booking.bookingFieldsResponses?.phone ||
-    booking.bookingFieldsResponses?.phoneNumber ||
-    booking.metadata?.phone ||
-    booking.attendees?.[0]?.phone ||
-    booking.attendees?.[0]?.phoneNumber;
+    booking.bookingFieldsResponses?.phoneNumber;
+
+  // Check all attendees for phone numbers
+  if (!phone && booking.attendees) {
+    for (const attendee of booking.attendees) {
+      phone = attendee.phone || attendee.phoneNumber || attendee.metadata?.phone;
+      if (phone) break;
+    }
+  }
+
+  // Check metadata
+  if (!phone) {
+    phone = booking.metadata?.phone;
+  }
+
+  // Check all bookingFieldsResponses keys for phone-like values
+  if (!phone && booking.bookingFieldsResponses) {
+    const responses = booking.bookingFieldsResponses;
+    // Check for any field that might contain a phone (case-insensitive)
+    for (const [key, value] of Object.entries(responses)) {
+      if (key.toLowerCase().includes('phone') || key.toLowerCase().includes('mobile')) {
+        phone = value;
+        break;
+      }
+    }
+  }
 
   if (!phone) {
     // Debug: log booking structure to understand the data format
@@ -84,7 +113,9 @@ function extractPhone(booking) {
       hasMetadata: !!booking.metadata,
       hasAttendees: !!booking.attendees,
       responsesKeys: booking.responses ? Object.keys(booking.responses) : [],
-      bookingFieldsResponsesKeys: booking.bookingFieldsResponses ? Object.keys(booking.bookingFieldsResponses) : []
+      bookingFieldsResponsesKeys: booking.bookingFieldsResponses ? Object.keys(booking.bookingFieldsResponses) : [],
+      attendeesCount: booking.attendees?.length || 0,
+      firstAttendeeKeys: booking.attendees?.[0] ? Object.keys(booking.attendees[0]) : []
     }, null, 2));
     return null;
   }
