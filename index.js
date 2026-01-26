@@ -22,6 +22,7 @@ if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
 }
 
 const processedBookings = new Set();
+const bookingStatusHistory = new Map(); // Track booking status changes: bookingId -> { lastStatus, lastChecked }
 const serviceStartTime = new Date();
 
 app.get("/", (_, res) => res.send("OK"));
@@ -33,9 +34,30 @@ function formatDateParts(isoString) {
   const d = new Date(isoString);
   if (isNaN(d)) return null;
 
+  // Format in Iraq/Baghdad timezone (UTC+3)
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Baghdad",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(d);
+  const day = parts.find(p => p.type === "day").value;
+  const month = parts.find(p => p.type === "month").value;
+  const year = parts.find(p => p.type === "year").value;
+  const hour = parts.find(p => p.type === "hour").value;
+  const minute = parts.find(p => p.type === "minute").value;
+  
+  const formattedDate = `${day}/${month}/${year}`;
+  const formattedTime = `${hour}:${minute}`;
+
   return {
-    date: d.toLocaleDateString("en-GB"), // 26/01/2026
-    time: d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    date: formattedDate,
+    time: formattedTime
   };
 }
 
@@ -217,8 +239,18 @@ async function fetchBookings() {
         return false;
       }
       
+      // Check if this booking just transitioned to "accepted" status
+      const previousStatus = bookingStatusHistory.get(booking.id);
+      const currentStatus = booking.status?.toLowerCase();
+      const isNewlyAccepted = !previousStatus || (previousStatus.lastStatus !== "accepted" && currentStatus === "accepted");
+      
+      // Update status history
+      bookingStatusHistory.set(booking.id, {
+        lastStatus: currentStatus,
+        lastChecked: now
+      });
+      
       // Check both creation time and update time
-      // A booking might be created as "pending" and then updated to "accepted" later
       const createdAtStr = booking.createdAt || booking.created_at || booking.created;
       const updatedAtStr = booking.updatedAt || booking.updated_at;
       
@@ -226,25 +258,32 @@ async function fetchBookings() {
       const updatedAt = updatedAtStr ? new Date(updatedAtStr) : null;
       
       // Use the most recent timestamp (creation or update)
-      // This catches bookings that were created but then updated to accepted status
       let relevantTime = createdAt;
       if (updatedAt && (!createdAt || updatedAt > createdAt)) {
         relevantTime = updatedAt;
       }
       
       if (!relevantTime || isNaN(relevantTime.getTime())) {
+        // If no timestamp but status just changed to accepted, process it
+        if (isNewlyAccepted) {
+          console.log(`✅ Booking ${booking.id} just transitioned to accepted status (no timestamp available)`);
+          return true;
+        }
         console.log(`⏭️  Skipping booking ${booking.id} - no valid timestamp. Available fields:`, Object.keys(booking).join(', '));
         return false;
       }
       
-      // Process bookings that were created OR updated to accepted in the last N minutes
+      // Process if:
+      // 1. Status just changed to accepted, OR
+      // 2. Booking was created/updated in the last N minutes
       const minutesAgo = Math.round((now - relevantTime) / 1000 / 60);
-      const isRecent = relevantTime >= timeWindowAgo;
+      const isRecent = isNewlyAccepted || relevantTime >= timeWindowAgo;
       
       if (!isRecent) {
         console.log(`⏭️  Skipping booking ${booking.id} - ${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago (threshold: ${windowMinutes} minutes)`);
       } else {
-        console.log(`✅ Booking ${booking.id} is new (${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago)`);
+        const reason = isNewlyAccepted ? "just transitioned to accepted" : `${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago`;
+        console.log(`✅ Booking ${booking.id} is new (${reason})`);
       }
       return isRecent;
     });
