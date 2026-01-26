@@ -12,8 +12,7 @@ const {
   OTPIQ_API_KEY,
   OTPIQ_ACCOUNT_ID,
   OTPIQ_PHONE_ID,
-  PORT = 3000,
-  NEW_BOOKING_WINDOW_MINUTES = 10
+  PORT = 3000
 } = process.env;
 
 if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
@@ -21,9 +20,8 @@ if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
   process.exit(1);
 }
 
-const processedBookings = new Set();
-const bookingStatusHistory = new Map(); // Track booking status changes: bookingId -> { lastStatus, lastChecked }
-const serviceStartTime = new Date();
+// Track which reminders have been sent: bookingId -> Set of reminder types sent
+const sentReminders = new Map(); // bookingId -> Set(["1hour", "5min"])
 
 app.get("/", (_, res) => res.send("OK"));
 app.listen(PORT, () => console.log("Server started on", PORT));
@@ -192,7 +190,7 @@ async function processBooking(booking) {
 
 async function fetchBookings() {
   try {
-    console.log("🔍 Checking bookings...");
+    console.log("🔍 Checking bookings for reminders...");
 
     const res = await axios.get("https://api.cal.com/v2/bookings", {
       headers: {
@@ -201,7 +199,7 @@ async function fetchBookings() {
       },
       params: {
         status: "upcoming",
-        limit: 20
+        limit: 50 // Get more bookings to check for reminders
       }
     });
 
@@ -214,85 +212,62 @@ async function fetchBookings() {
     );
     console.log(`✅ Found ${acceptedBookings.length} accepted bookings`);
 
-    // Only process bookings created in the last N minutes (newly created)
     const now = new Date();
-    const windowMinutes = parseInt(NEW_BOOKING_WINDOW_MINUTES, 10) || 10;
-    const timeWindowAgo = new Date(now.getTime() - windowMinutes * 60 * 1000);
-    
-    // Debug: Log first booking structure to understand available fields
-    if (acceptedBookings.length > 0 && !processedBookings.has(acceptedBookings[0].id)) {
-      const sampleBooking = acceptedBookings[0];
-      console.log(`🔍 Sample booking fields:`, JSON.stringify({
-        id: sampleBooking.id,
-        status: sampleBooking.status,
-        createdAt: sampleBooking.createdAt,
-        created_at: sampleBooking.created_at,
-        created: sampleBooking.created,
-        updatedAt: sampleBooking.updatedAt,
-        allKeys: Object.keys(sampleBooking).slice(0, 20) // First 20 keys
-      }, null, 2));
+    const remindersToSend = [];
+
+    for (const booking of acceptedBookings) {
+      if (!booking.start) {
+        continue;
+      }
+
+      const bookingStart = new Date(booking.start);
+      if (isNaN(bookingStart.getTime())) {
+        continue;
+      }
+
+      // Skip if booking is in the past
+      if (bookingStart < now) {
+        continue;
+      }
+
+      // Calculate time until booking in minutes
+      const timeUntilBooking = (bookingStart - now) / 1000 / 60;
+      
+      // Get reminders already sent for this booking
+      const sentForBooking = sentReminders.get(booking.id) || new Set();
+
+      // Check if we should send 1 hour reminder (60 minutes, with 1 minute tolerance)
+      if (timeUntilBooking <= 61 && timeUntilBooking >= 59 && !sentForBooking.has("1hour")) {
+        remindersToSend.push({ booking, reminderType: "1hour", timeUntil: timeUntilBooking });
+        sentForBooking.add("1hour");
+        sentReminders.set(booking.id, sentForBooking);
+      }
+      
+      // Check if we should send 5 minute reminder (5 minutes, with 1 minute tolerance)
+      if (timeUntilBooking <= 6 && timeUntilBooking >= 4 && !sentForBooking.has("5min")) {
+        remindersToSend.push({ booking, reminderType: "5min", timeUntil: timeUntilBooking });
+        sentForBooking.add("5min");
+        sentReminders.set(booking.id, sentForBooking);
+      }
     }
-    
-    const newBookings = acceptedBookings.filter(booking => {
-      // Skip if already processed
-      if (processedBookings.has(booking.id)) {
-        return false;
-      }
-      
-      // Check if this booking just transitioned to "accepted" status
-      const previousStatus = bookingStatusHistory.get(booking.id);
-      const currentStatus = booking.status?.toLowerCase();
-      const isNewlyAccepted = !previousStatus || (previousStatus.lastStatus !== "accepted" && currentStatus === "accepted");
-      
-      // Update status history
-      bookingStatusHistory.set(booking.id, {
-        lastStatus: currentStatus,
-        lastChecked: now
-      });
-      
-      // Check both creation time and update time
-      const createdAtStr = booking.createdAt || booking.created_at || booking.created;
-      const updatedAtStr = booking.updatedAt || booking.updated_at;
-      
-      const createdAt = createdAtStr ? new Date(createdAtStr) : null;
-      const updatedAt = updatedAtStr ? new Date(updatedAtStr) : null;
-      
-      // Use the most recent timestamp (creation or update)
-      let relevantTime = createdAt;
-      if (updatedAt && (!createdAt || updatedAt > createdAt)) {
-        relevantTime = updatedAt;
-      }
-      
-      if (!relevantTime || isNaN(relevantTime.getTime())) {
-        // If no timestamp but status just changed to accepted, process it
-        if (isNewlyAccepted) {
-          console.log(`✅ Booking ${booking.id} just transitioned to accepted status (no timestamp available)`);
-          return true;
-        }
-        console.log(`⏭️  Skipping booking ${booking.id} - no valid timestamp. Available fields:`, Object.keys(booking).join(', '));
-        return false;
-      }
-      
-      // Process if:
-      // 1. Status just changed to accepted, OR
-      // 2. Booking was created/updated in the last N minutes
-      const minutesAgo = Math.round((now - relevantTime) / 1000 / 60);
-      const isRecent = isNewlyAccepted || relevantTime >= timeWindowAgo;
-      
-      if (!isRecent) {
-        console.log(`⏭️  Skipping booking ${booking.id} - ${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago (threshold: ${windowMinutes} minutes)`);
-      } else {
-        const reason = isNewlyAccepted ? "just transitioned to accepted" : `${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago`;
-        console.log(`✅ Booking ${booking.id} is new (${reason})`);
-      }
-      return isRecent;
-    });
 
-    console.log(`🆕 Found ${newBookings.length} newly created bookings (last ${windowMinutes} minutes)`);
+    console.log(`🔔 Found ${remindersToSend.length} reminders to send`);
 
-    for (const booking of newBookings) {
+    for (const { booking, reminderType, timeUntil } of remindersToSend) {
+      console.log(`⏰ Sending ${reminderType} reminder for booking ${booking.id} (${Math.round(timeUntil)} minutes until booking)`);
       await processBooking(booking);
-      processedBookings.add(booking.id);
+    }
+
+    // Clean up old reminders (bookings that have passed)
+    for (const [bookingId, sentSet] of sentReminders.entries()) {
+      const booking = acceptedBookings.find(b => b.id === bookingId);
+      if (booking && booking.start) {
+        const bookingStart = new Date(booking.start);
+        if (bookingStart < now) {
+          // Booking has passed, remove from tracking
+          sentReminders.delete(bookingId);
+        }
+      }
     }
   } catch (err) {
     const errorData = err.response?.data || {};
