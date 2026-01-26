@@ -195,24 +195,53 @@ async function fetchBookings() {
     const now = new Date();
     const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
     
+    // Debug: Log first booking structure to understand available fields
+    if (acceptedBookings.length > 0 && !processedBookings.has(acceptedBookings[0].id)) {
+      const sampleBooking = acceptedBookings[0];
+      console.log(`🔍 Sample booking fields:`, JSON.stringify({
+        id: sampleBooking.id,
+        status: sampleBooking.status,
+        createdAt: sampleBooking.createdAt,
+        created_at: sampleBooking.created_at,
+        created: sampleBooking.created,
+        updatedAt: sampleBooking.updatedAt,
+        allKeys: Object.keys(sampleBooking).slice(0, 20) // First 20 keys
+      }, null, 2));
+    }
+    
     const newBookings = acceptedBookings.filter(booking => {
       // Skip if already processed
-      if (processedBookings.has(booking.id)) return false;
-      
-      // Check if booking was created recently - try multiple possible field names
-      const createdAtStr = booking.createdAt || booking.created_at || booking.created || booking.timeSlot?.start;
-      const createdAt = createdAtStr ? new Date(createdAtStr) : null;
-      
-      if (!createdAt || isNaN(createdAt.getTime())) {
-        // If no valid timestamp found, skip this booking
-        console.log(`⏭️  Skipping booking ${booking.id} - no valid creation timestamp`);
+      if (processedBookings.has(booking.id)) {
+        console.log(`⏭️  Skipping booking ${booking.id} - already processed`);
         return false;
       }
       
-      // Only process bookings created in the last 5 minutes
-      const isRecent = createdAt >= fiveMinutesAgo;
+      // Check if booking was created recently - try multiple possible field names
+      const createdAtStr = booking.createdAt || booking.created_at || booking.created || booking.updatedAt || booking.updated_at;
+      let createdAt = createdAtStr ? new Date(createdAtStr) : null;
+      
+      // If no creation timestamp, use service start time as fallback (for first run)
+      // This ensures we process bookings that exist when service starts
+      if (!createdAt || isNaN(createdAt.getTime())) {
+        // Try to use service start time if this is the first check
+        if (processedBookings.size === 0) {
+          console.log(`⚠️  Booking ${booking.id} has no timestamp, using service start time as fallback`);
+          createdAt = serviceStartTime;
+        } else {
+          // If no valid timestamp found, log the booking structure for debugging
+          console.log(`⏭️  Skipping booking ${booking.id} - no valid creation timestamp. Available fields:`, Object.keys(booking).join(', '));
+          return false;
+        }
+      }
+      
+      // Only process bookings created in the last 5 minutes OR after service started (for first run)
+      const minutesAgo = Math.round((now - createdAt) / 1000 / 60);
+      const isRecent = createdAt >= fiveMinutesAgo || (processedBookings.size === 0 && createdAt >= serviceStartTime);
+      
       if (!isRecent) {
-        console.log(`⏭️  Skipping booking ${booking.id} - created ${Math.round((now - createdAt) / 1000 / 60)} minutes ago`);
+        console.log(`⏭️  Skipping booking ${booking.id} - created ${minutesAgo} minutes ago (threshold: 5 minutes)`);
+      } else {
+        console.log(`✅ Booking ${booking.id} is new (created ${minutesAgo} minutes ago)`);
       }
       return isRecent;
     });
