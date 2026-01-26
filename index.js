@@ -214,36 +214,37 @@ async function fetchBookings() {
     const newBookings = acceptedBookings.filter(booking => {
       // Skip if already processed
       if (processedBookings.has(booking.id)) {
-        console.log(`⏭️  Skipping booking ${booking.id} - already processed`);
         return false;
       }
       
-      // Check if booking was created recently - try multiple possible field names
-      const createdAtStr = booking.createdAt || booking.created_at || booking.created || booking.updatedAt || booking.updated_at;
-      let createdAt = createdAtStr ? new Date(createdAtStr) : null;
+      // Check both creation time and update time
+      // A booking might be created as "pending" and then updated to "accepted" later
+      const createdAtStr = booking.createdAt || booking.created_at || booking.created;
+      const updatedAtStr = booking.updatedAt || booking.updated_at;
       
-      // If no creation timestamp, use service start time as fallback (for first run)
-      // This ensures we process bookings that exist when service starts
-      if (!createdAt || isNaN(createdAt.getTime())) {
-        // Try to use service start time if this is the first check
-        if (processedBookings.size === 0) {
-          console.log(`⚠️  Booking ${booking.id} has no timestamp, using service start time as fallback`);
-          createdAt = serviceStartTime;
-        } else {
-          // If no valid timestamp found, log the booking structure for debugging
-          console.log(`⏭️  Skipping booking ${booking.id} - no valid creation timestamp. Available fields:`, Object.keys(booking).join(', '));
-          return false;
-        }
+      const createdAt = createdAtStr ? new Date(createdAtStr) : null;
+      const updatedAt = updatedAtStr ? new Date(updatedAtStr) : null;
+      
+      // Use the most recent timestamp (creation or update)
+      // This catches bookings that were created but then updated to accepted status
+      let relevantTime = createdAt;
+      if (updatedAt && (!createdAt || updatedAt > createdAt)) {
+        relevantTime = updatedAt;
       }
       
-      // Only process bookings created in the last N minutes OR after service started (for first run)
-      const minutesAgo = Math.round((now - createdAt) / 1000 / 60);
-      const isRecent = createdAt >= timeWindowAgo || (processedBookings.size === 0 && createdAt >= serviceStartTime);
+      if (!relevantTime || isNaN(relevantTime.getTime())) {
+        console.log(`⏭️  Skipping booking ${booking.id} - no valid timestamp. Available fields:`, Object.keys(booking).join(', '));
+        return false;
+      }
+      
+      // Process bookings that were created OR updated to accepted in the last N minutes
+      const minutesAgo = Math.round((now - relevantTime) / 1000 / 60);
+      const isRecent = relevantTime >= timeWindowAgo;
       
       if (!isRecent) {
-        console.log(`⏭️  Skipping booking ${booking.id} - created ${minutesAgo} minutes ago (threshold: ${windowMinutes} minutes)`);
+        console.log(`⏭️  Skipping booking ${booking.id} - ${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago (threshold: ${windowMinutes} minutes)`);
       } else {
-        console.log(`✅ Booking ${booking.id} is new (created ${minutesAgo} minutes ago)`);
+        console.log(`✅ Booking ${booking.id} is new (${createdAt && updatedAt && updatedAt > createdAt ? 'updated' : 'created'} ${minutesAgo} minutes ago)`);
       }
       return isRecent;
     });
