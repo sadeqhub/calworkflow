@@ -12,7 +12,8 @@ const {
   OTPIQ_API_KEY,
   OTPIQ_ACCOUNT_ID,
   OTPIQ_PHONE_ID,
-  PORT = 3000
+  PORT = 3000,
+  NEW_BOOKING_WINDOW_MINUTES = 10
 } = process.env;
 
 if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
@@ -191,9 +192,10 @@ async function fetchBookings() {
     );
     console.log(`✅ Found ${acceptedBookings.length} accepted bookings`);
 
-    // Only process bookings created in the last 5 minutes (newly created)
+    // Only process bookings created in the last N minutes (newly created)
     const now = new Date();
-    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+    const windowMinutes = parseInt(NEW_BOOKING_WINDOW_MINUTES, 10) || 10;
+    const timeWindowAgo = new Date(now.getTime() - windowMinutes * 60 * 1000);
     
     // Debug: Log first booking structure to understand available fields
     if (acceptedBookings.length > 0 && !processedBookings.has(acceptedBookings[0].id)) {
@@ -234,19 +236,19 @@ async function fetchBookings() {
         }
       }
       
-      // Only process bookings created in the last 5 minutes OR after service started (for first run)
+      // Only process bookings created in the last N minutes OR after service started (for first run)
       const minutesAgo = Math.round((now - createdAt) / 1000 / 60);
-      const isRecent = createdAt >= fiveMinutesAgo || (processedBookings.size === 0 && createdAt >= serviceStartTime);
+      const isRecent = createdAt >= timeWindowAgo || (processedBookings.size === 0 && createdAt >= serviceStartTime);
       
       if (!isRecent) {
-        console.log(`⏭️  Skipping booking ${booking.id} - created ${minutesAgo} minutes ago (threshold: 5 minutes)`);
+        console.log(`⏭️  Skipping booking ${booking.id} - created ${minutesAgo} minutes ago (threshold: ${windowMinutes} minutes)`);
       } else {
         console.log(`✅ Booking ${booking.id} is new (created ${minutesAgo} minutes ago)`);
       }
       return isRecent;
     });
 
-    console.log(`🆕 Found ${newBookings.length} newly created bookings (last 5 minutes)`);
+    console.log(`🆕 Found ${newBookings.length} newly created bookings (last ${windowMinutes} minutes)`);
 
     for (const booking of newBookings) {
       await processBooking(booking);
