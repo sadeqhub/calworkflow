@@ -61,23 +61,27 @@ async function sendBookingConfirmation(phone, name, date, time) {
 
     const phoneNumber = phone.startsWith("+") ? phone.slice(1) : phone;
 
+    const requestPayload = {
+      phoneNumber: phoneNumber,
+      smsType: "whatsapp-template",
+      provider: "whatsapp",
+      templateName: "democall_booking_ar",
+      whatsappAccountId: OTPIQ_ACCOUNT_ID,
+      whatsappPhoneId: OTPIQ_PHONE_ID,
+      templateParameters: {
+        body: {
+          "1": name,
+          "2": date,
+          "3": time
+        }
+      }
+    };
+
+    console.log("📋 Booking confirmation request payload:", JSON.stringify(requestPayload, null, 2));
+
     const res = await axios.post(
       "https://api.otpiq.com/api/sms",
-      {
-        phoneNumber: phoneNumber,
-        smsType: "whatsapp-template",
-        provider: "whatsapp",
-        templateName: "democall_booking_ar",
-        whatsappAccountId: OTPIQ_ACCOUNT_ID,
-        whatsappPhoneId: OTPIQ_PHONE_ID,
-        templateParameters: {
-          body: {
-            "1": name,
-            "2": date,
-            "3": time
-          }
-        }
-      },
+      requestPayload,
       {
         headers: {
           Authorization: `Bearer ${OTPIQ_API_KEY}`,
@@ -86,7 +90,8 @@ async function sendBookingConfirmation(phone, name, date, time) {
       }
     );
 
-    console.log("✅ Booking confirmation WhatsApp sent:", res.data);
+    console.log("✅ Booking confirmation WhatsApp response status:", res.status);
+    console.log("✅ Booking confirmation WhatsApp response data:", JSON.stringify(res.data, null, 2));
   } catch (err) {
     const errorDetails = {
       message: err.message,
@@ -105,22 +110,26 @@ async function sendReminder(phone, name, timeRemaining) {
 
     const phoneNumber = phone.startsWith("+") ? phone.slice(1) : phone;
 
+    const requestPayload = {
+      phoneNumber: phoneNumber,
+      smsType: "whatsapp-template",
+      provider: "whatsapp",
+      templateName: "democall_reminder_ar",
+      whatsappAccountId: OTPIQ_ACCOUNT_ID,
+      whatsappPhoneId: OTPIQ_PHONE_ID,
+      templateParameters: {
+        body: {
+          "1": name,
+          "2": timeRemaining
+        }
+      }
+    };
+
+    console.log("📋 Reminder request payload:", JSON.stringify(requestPayload, null, 2));
+
     const res = await axios.post(
       "https://api.otpiq.com/api/sms",
-      {
-        phoneNumber: phoneNumber,
-        smsType: "whatsapp-template",
-        provider: "whatsapp",
-        templateName: "democall_reminder_ar",
-        whatsappAccountId: OTPIQ_ACCOUNT_ID,
-        whatsappPhoneId: OTPIQ_PHONE_ID,
-        templateParameters: {
-          body: {
-            "1": name,
-            "2": timeRemaining
-          }
-        }
-      },
+      requestPayload,
       {
         headers: {
           Authorization: `Bearer ${OTPIQ_API_KEY}`,
@@ -129,7 +138,8 @@ async function sendReminder(phone, name, timeRemaining) {
       }
     );
 
-    console.log("✅ Reminder WhatsApp sent:", res.data);
+    console.log("✅ Reminder WhatsApp response status:", res.status);
+    console.log("✅ Reminder WhatsApp response data:", JSON.stringify(res.data, null, 2));
   } catch (err) {
     const errorDetails = {
       message: err.message,
