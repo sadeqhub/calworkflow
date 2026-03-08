@@ -396,5 +396,5 @@ async function fetchBookings() {
   }
 }
 
-setInterval(fetchBookings, 60 * 1000);
+setInterval(fetchBookings, 30 * 1000);
 fetchBookings();
