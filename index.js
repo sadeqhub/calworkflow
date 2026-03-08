@@ -1,24 +1,19 @@
-import express from "express";
-import axios from "axios";
-import dotenv from "dotenv";
+const express = require("express");
+const axios = require("axios");
 
-dotenv.config();
+const CAL_BOOKINGS_URL = "https://api.cal.com/v2/bookings";
+const CAL_API_VERSION = "2024-08-13";
+const CAL_API_KEY = process.env.CAL_API_KEY;
+
+const OTPIQ_SMS_URL = "https://api.otpiq.com/api/sms";
+const OTPIQ_API_KEY = process.env.OTPIQ_API_KEY;
+const OTPIQ_ACCOUNT_ID = process.env.OTPIQ_ACCOUNT_ID;
+const OTPIQ_PHONE_ID = process.env.OTPIQ_PHONE_ID;
+
+const PORT = 3000;
 
 const app = express();
 app.use(express.json());
-
-const {
-  CAL_API_KEY,
-  OTPIQ_API_KEY,
-  OTPIQ_ACCOUNT_ID,
-  OTPIQ_PHONE_ID,
-  PORT = 3000
-} = process.env;
-
-if (!CAL_API_KEY || !OTPIQ_API_KEY || !OTPIQ_ACCOUNT_ID || !OTPIQ_PHONE_ID) {
-  console.error("❌ Missing ENV variables");
-  process.exit(1);
-}
 
 const sentReminders = new Map();
 const sentConfirmations = new Set();
@@ -38,20 +33,17 @@ function formatDatePartsArabic(isoString) {
     month: "2-digit",
     day: "2-digit"
   });
-  
+
   const timeFormatter = new Intl.DateTimeFormat("ar-SA", {
     timeZone: "Asia/Baghdad",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
   });
-  
-  const formattedDate = dateFormatter.format(d);
-  const formattedTime = timeFormatter.format(d);
 
   return {
-    date: formattedDate,
-    time: formattedTime
+    date: dateFormatter.format(d),
+    time: timeFormatter.format(d)
   };
 }
 
@@ -65,7 +57,7 @@ async function sendBookingConfirmation(phone, name, date, time) {
       phoneNumber: phoneNumber,
       smsType: "whatsapp-template",
       provider: "whatsapp",
-      templateName: "democall_booking_ar",
+      templateName: "democall_booking_arabic",
       whatsappAccountId: OTPIQ_ACCOUNT_ID,
       whatsappPhoneId: OTPIQ_PHONE_ID,
       templateParameters: {
@@ -77,21 +69,23 @@ async function sendBookingConfirmation(phone, name, date, time) {
       }
     };
 
-    console.log("📋 Booking confirmation request payload:", JSON.stringify(requestPayload, null, 2));
-
-    const res = await axios.post(
-      "https://api.otpiq.com/api/sms",
-      requestPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${OTPIQ_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
+    console.log(
+      "📋 Booking confirmation request payload:",
+      JSON.stringify(requestPayload, null, 2)
     );
 
+    const res = await axios.post(OTPIQ_SMS_URL, requestPayload, {
+      headers: {
+        Authorization: `Bearer ${OTPIQ_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    });
+
     console.log("✅ Booking confirmation WhatsApp response status:", res.status);
-    console.log("✅ Booking confirmation WhatsApp response data:", JSON.stringify(res.data, null, 2));
+    console.log(
+      "✅ Booking confirmation WhatsApp response data:",
+      JSON.stringify(res.data, null, 2)
+    );
   } catch (err) {
     const errorDetails = {
       message: err.message,
@@ -114,7 +108,7 @@ async function sendReminder(phone, name, timeRemaining) {
       phoneNumber: phoneNumber,
       smsType: "whatsapp-template",
       provider: "whatsapp",
-      templateName: "democall_reminder_ar",
+      templateName: "democall_reminder_arabic",
       whatsappAccountId: OTPIQ_ACCOUNT_ID,
       whatsappPhoneId: OTPIQ_PHONE_ID,
       templateParameters: {
@@ -125,21 +119,23 @@ async function sendReminder(phone, name, timeRemaining) {
       }
     };
 
-    console.log("📋 Reminder request payload:", JSON.stringify(requestPayload, null, 2));
-
-    const res = await axios.post(
-      "https://api.otpiq.com/api/sms",
-      requestPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${OTPIQ_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
+    console.log(
+      "📋 Reminder request payload:",
+      JSON.stringify(requestPayload, null, 2)
     );
 
+    const res = await axios.post(OTPIQ_SMS_URL, requestPayload, {
+      headers: {
+        Authorization: `Bearer ${OTPIQ_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    });
+
     console.log("✅ Reminder WhatsApp response status:", res.status);
-    console.log("✅ Reminder WhatsApp response data:", JSON.stringify(res.data, null, 2));
+    console.log(
+      "✅ Reminder WhatsApp response data:",
+      JSON.stringify(res.data, null, 2)
+    );
   } catch (err) {
     const errorDetails = {
       message: err.message,
@@ -163,7 +159,8 @@ function extractPhone(booking) {
 
   if (!phone && booking.attendees) {
     for (const attendee of booking.attendees) {
-      phone = attendee.phone || attendee.phoneNumber || attendee.metadata?.phone;
+      phone =
+        attendee.phone || attendee.phoneNumber || attendee.metadata?.phone;
       if (phone) break;
     }
   }
@@ -175,7 +172,10 @@ function extractPhone(booking) {
   if (!phone && booking.bookingFieldsResponses) {
     const responses = booking.bookingFieldsResponses;
     for (const [key, value] of Object.entries(responses)) {
-      if (key.toLowerCase().includes('phone') || key.toLowerCase().includes('mobile')) {
+      if (
+        key.toLowerCase().includes("phone") ||
+        key.toLowerCase().includes("mobile")
+      ) {
         phone = value;
         break;
       }
@@ -183,16 +183,27 @@ function extractPhone(booking) {
   }
 
   if (!phone) {
-    console.log(`📋 Booking ${booking.id} structure:`, JSON.stringify({
-      hasResponses: !!booking.responses,
-      hasBookingFieldsResponses: !!booking.bookingFieldsResponses,
-      hasMetadata: !!booking.metadata,
-      hasAttendees: !!booking.attendees,
-      responsesKeys: booking.responses ? Object.keys(booking.responses) : [],
-      bookingFieldsResponsesKeys: booking.bookingFieldsResponses ? Object.keys(booking.bookingFieldsResponses) : [],
-      attendeesCount: booking.attendees?.length || 0,
-      firstAttendeeKeys: booking.attendees?.[0] ? Object.keys(booking.attendees[0]) : []
-    }, null, 2));
+    console.log(
+      `📋 Booking ${booking.id} structure:`,
+      JSON.stringify(
+        {
+          hasResponses: !!booking.responses,
+          hasBookingFieldsResponses: !!booking.bookingFieldsResponses,
+          hasMetadata: !!booking.metadata,
+          hasAttendees: !!booking.attendees,
+          responsesKeys: booking.responses ? Object.keys(booking.responses) : [],
+          bookingFieldsResponsesKeys: booking.bookingFieldsResponses
+            ? Object.keys(booking.bookingFieldsResponses)
+            : [],
+          attendeesCount: booking.attendees?.length || 0,
+          firstAttendeeKeys: booking.attendees?.[0]
+            ? Object.keys(booking.attendees[0])
+            : []
+        },
+        null,
+        2
+      )
+    );
     return null;
   }
 
@@ -247,7 +258,8 @@ async function processReminder(booking, reminderType) {
     booking.bookingFieldsResponses?.name ||
     "Guest";
 
-  const timeRemaining = reminderType === "1hour" ? "ساعة واحدة" : "خمس دقائق";
+  const timeRemaining =
+    reminderType === "1hour" ? "ساعة واحدة" : "خمس دقائق";
 
   await sendReminder(phone, name, timeRemaining);
 }
@@ -256,10 +268,10 @@ async function fetchBookings() {
   try {
     console.log("🔍 Checking bookings for confirmations and reminders...");
 
-    const res = await axios.get("https://api.cal.com/v2/bookings", {
+    const res = await axios.get(CAL_BOOKINGS_URL, {
       headers: {
         Authorization: `Bearer ${CAL_API_KEY}`,
-        "cal-api-version": "2024-08-13"
+        "cal-api-version": CAL_API_VERSION
       },
       params: {
         status: "upcoming",
@@ -271,7 +283,8 @@ async function fetchBookings() {
     console.log(`📦 Fetched ${bookings.length} bookings`);
 
     const acceptedBookings = bookings.filter(
-      booking => booking.status === "ACCEPTED" || booking.status === "accepted"
+      (booking) =>
+        booking.status === "ACCEPTED" || booking.status === "accepted"
     );
     console.log(`✅ Found ${acceptedBookings.length} accepted bookings`);
 
@@ -293,12 +306,17 @@ async function fetchBookings() {
         continue;
       }
 
-      const bookingCreated = booking.createdAt ? new Date(booking.createdAt) : null;
-      const minutesSinceCreation = bookingCreated ? (now - bookingCreated) / 1000 / 60 : null;
-      const isNewBooking = !sentConfirmations.has(booking.id) && 
-        bookingCreated !== null && 
+      const bookingCreated = booking.createdAt
+        ? new Date(booking.createdAt)
+        : null;
+      const minutesSinceCreation = bookingCreated
+        ? (now - bookingCreated) / 1000 / 60
+        : null;
+      const isNewBooking =
+        !sentConfirmations.has(booking.id) &&
+        bookingCreated !== null &&
         minutesSinceCreation !== null &&
-        minutesSinceCreation <= 1 && 
+        minutesSinceCreation <= 1 &&
         minutesSinceCreation >= 0;
 
       if (isNewBooking) {
@@ -307,17 +325,33 @@ async function fetchBookings() {
       }
 
       const timeUntilBooking = (bookingStart - now) / 1000 / 60;
-      
+
       const sentForBooking = sentReminders.get(booking.id) || new Set();
 
-      if (timeUntilBooking <= 61 && timeUntilBooking >= 59 && !sentForBooking.has("1hour")) {
-        remindersToSend.push({ booking, reminderType: "1hour", timeUntil: timeUntilBooking });
+      if (
+        timeUntilBooking <= 61 &&
+        timeUntilBooking >= 59 &&
+        !sentForBooking.has("1hour")
+      ) {
+        remindersToSend.push({
+          booking,
+          reminderType: "1hour",
+          timeUntil: timeUntilBooking
+        });
         sentForBooking.add("1hour");
         sentReminders.set(booking.id, sentForBooking);
       }
-      
-      if (timeUntilBooking <= 6 && timeUntilBooking >= 4 && !sentForBooking.has("5min")) {
-        remindersToSend.push({ booking, reminderType: "5min", timeUntil: timeUntilBooking });
+
+      if (
+        timeUntilBooking <= 6 &&
+        timeUntilBooking >= 4 &&
+        !sentForBooking.has("5min")
+      ) {
+        remindersToSend.push({
+          booking,
+          reminderType: "5min",
+          timeUntil: timeUntilBooking
+        });
         sentForBooking.add("5min");
         sentReminders.set(booking.id, sentForBooking);
       }
@@ -332,12 +366,16 @@ async function fetchBookings() {
     }
 
     for (const { booking, reminderType, timeUntil } of remindersToSend) {
-      console.log(`⏰ Sending ${reminderType} reminder for booking ${booking.id} (${Math.round(timeUntil)} minutes until booking)`);
+      console.log(
+        `⏰ Sending ${reminderType} reminder for booking ${booking.id} (${Math.round(
+          timeUntil
+        )} minutes until booking)`
+      );
       await processReminder(booking, reminderType);
     }
 
-    for (const [bookingId, sentSet] of sentReminders.entries()) {
-      const booking = acceptedBookings.find(b => b.id === bookingId);
+    for (const [bookingId] of sentReminders.entries()) {
+      const booking = acceptedBookings.find((b) => b.id === bookingId);
       if (booking && booking.start) {
         const bookingStart = new Date(booking.start);
         if (bookingStart < now) {
@@ -350,7 +388,10 @@ async function fetchBookings() {
     const errorData = err.response?.data || {};
     console.error("❌ Cal API error:", JSON.stringify(errorData, null, 2));
     if (errorData.details?.errors) {
-      console.error("Error details:", JSON.stringify(errorData.details.errors, null, 2));
+      console.error(
+        "Error details:",
+        JSON.stringify(errorData.details.errors, null, 2)
+      );
     }
   }
 }
