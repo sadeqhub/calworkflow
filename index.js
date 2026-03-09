@@ -98,7 +98,7 @@ async function sendBookingConfirmation(phone, name, date, time) {
   }
 }
 
-async function sendReminder(phone, name, timeRemaining) {
+async function sendReminder(phone, name, timeRemaining, meetId) {
   try {
     console.log(`📤 Sending reminder WhatsApp to ${phone}`);
 
@@ -114,7 +114,8 @@ async function sendReminder(phone, name, timeRemaining) {
       templateParameters: {
         body: {
           "1": name,
-          "2": timeRemaining
+          "2": timeRemaining,
+          "3": meetId || ""
         }
       }
     };
@@ -261,7 +262,10 @@ async function processReminder(booking, reminderType) {
   const timeRemaining =
     reminderType === "1hour" ? "ساعة واحدة" : "خمس دقائق";
 
-  await sendReminder(phone, name, timeRemaining);
+  const meetUrl = booking.location || booking.meetingUrl || "";
+  const meetId = meetUrl.split("/").pop() || "";
+
+  await sendReminder(phone, name, timeRemaining, meetId);
 }
 
 async function fetchBookings() {
