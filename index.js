@@ -57,7 +57,7 @@ async function sendBookingConfirmation(phone, name, date, time) {
       phoneNumber: phoneNumber,
       smsType: "whatsapp-template",
       provider: "whatsapp",
-      templateName: "democall_booking_arabic",
+      templateName: "democall_booking_arab",
       whatsappAccountId: OTPIQ_ACCOUNT_ID,
       whatsappPhoneId: OTPIQ_PHONE_ID,
       templateParameters: {
