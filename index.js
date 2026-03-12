@@ -116,7 +116,11 @@ async function sendReminder(phone, name, timeRemaining, meetId) {
           "1": name,
           "2": timeRemaining
         },
-        button_0_1: meetId || ""
+        buttons: {
+          "0": {
+            "1": meetId || ""
+          }
+        }
       }
     };
 
