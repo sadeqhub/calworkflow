@@ -114,9 +114,9 @@ async function sendReminder(phone, name, timeRemaining, meetId) {
       templateParameters: {
         body: {
           "1": name,
-          "2": timeRemaining,
-          "3": meetId || ""
-        }
+          "2": timeRemaining
+        },
+        button_0_1: meetId || ""
       }
     };
 
